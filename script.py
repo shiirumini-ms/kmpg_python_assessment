@@ -12,7 +12,7 @@ import rasterio as rio
 from rasterio.crs import CRS 
 
 # raster operations
-from rasterio.features import geometry_mask
+from rasterio.mask import mask
 
 # calculation
 import numpy as np 
@@ -127,7 +127,7 @@ print(shape01147.CenLat)
 
 
 # ---- Task 1b:  Temperature and precipitation time series ----
-print(climate01147)
+# print(climate01147)
 
 # extract year and anom data ----
 # Group by year and sum precipitation over the time dimension (within each year)
@@ -205,3 +205,8 @@ plt.subplots_adjust(right = 0.7)
 
 fig.savefig("figure/task1b_climate_timeseries.png")
 # ------------------------ # 
+
+# ---- Task 1c:  Temperature and precipitation time series ----
+print(thick02416.tags()) 
+
+
