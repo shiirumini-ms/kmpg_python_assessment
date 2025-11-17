@@ -1,4 +1,4 @@
-# ---- Load Libraries ---- # 
+# ==== Load Libraries ==== # 
 # directory management 
 import os
 
@@ -21,9 +21,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import string
-# ------------------------ # 
+# ============================ # 
 
-# ---- Load Data ---- # 
+
+
+# ==== Load Data ==== # 
 # set working directory ----
 clim_dir = "glacier/clim/"
 dem_dir = "glacier/dems/"
@@ -53,9 +55,10 @@ thick02416 = rio.open(thick_dir + rids[0] + "_thickness.tif")
 thick01147 = rio.open(thick_dir + rids[1] + "_thickness.tif")
 
 print(f"All glacier files loaded successfully...")
-# ------------------------ # 
+# ============================ #  
 
-# ---- Check CRS ---- # 
+
+# ==== Check CRS ==== # 
 print(shape02416.geometry.crs) # outline shpaefile crs is EPSG:4326
 print(thick02416.crs) # EPSG:32718
 print(thick01147.crs) # EPSG:32719
@@ -64,8 +67,10 @@ print(thick01147.crs) # EPSG:32719
 print(dem02416.crs)
 print(dem01147.crs)
 # DEMs crs relative to glacier centre
+# ============================ # 
 
-# ---- Task 1a: Plotting glacier outline over elevation ---- # 
+
+# ==== Task 1a: Plotting glacier outline over elevation ==== # 
 z = dem02416.read(1) # read the first layer: elevation (m)
 z1 = dem01147.read(1)
 bound = dem02416.bounds # get extents 
@@ -86,22 +91,23 @@ ax.set_yticks([])
 ax1 = fig.add_subplot(gs[0, 0])
 elevation = ax1.imshow(z, cmap="terrain", extent=(bound.left, bound.right, bound.bottom, bound.top))
 cbar = fig.colorbar(elevation, shrink = .55)
-cbar.set_label("Elevation (m)", fontsize=12)
+cbar.set_label("Elevation (m)", fontsize=10)
 cbar.set_ticks([4000, 4500, 5000, 5500])
 plt.xlabel("Easting (m)", fontsize = 10)
 plt.ylabel("Northing (m)", fontsize=10)
 shape02416.plot(facecolor = "none", edgecolor = "black", ax=ax1)
 ax1.annotate('(a)',
-             xy=(-0.15, 1.17),
+             xy=(-0.15, 1.15),
              xycoords='axes fraction',
              horizontalalignment='left',
              verticalalignment='top',
-             fontsize=15)
+             fontsize=10, 
+             weight="bold")
 
 ax2 = fig.add_subplot(gs[0, 1])
 elevation1 = ax2.imshow(z1, cmap = "terrain", extent = (bound1.left, bound1.right, bound1.bottom, bound1.top))
 cbar = plt.colorbar(elevation1, shrink = .52)
-cbar.set_label("Elevation(m)", fontsize = 12)
+cbar.set_label("Elevation(m)", fontsize = 10)
 cbar.set_ticks([4300, 4600, 4900, 5200])
 plt.xlabel("Easting(m)", fontsize = 10)
 plt.ylabel("Northing(m)", fontsize = 10)
@@ -110,33 +116,35 @@ ax2.text(-0.1, 1.1, "B")
 ax2.annotate('(b)',
              xy=(-0.15, 1.1),
              xycoords='axes fraction',
-             fontsize=15)
+             fontsize=10, 
+             weight = "bold")
 
-fig.subplots_adjust(left=0.2, wspace=0.8)
+fig.subplots_adjust(left=0.2, wspace=0.5)
 # plt.show()
 
-fig.savefig("figure/task1a_outline_elevation.png")
+fig.savefig("figure/task1a_outline_elevation.png", dpi=300)
 
 # Get Central coordinates for each glacier for caption----
 print(shape02416.CenLon)
 print(shape02416.CenLat)
 print(shape01147.CenLon)
 print(shape01147.CenLat)
-# ------------------------ # 
+# ============================ # 
 
 
 
-# ---- Task 1b:  Temperature and precipitation time series ----
-# print(climate01147)
+# ==== Task 1b:  Temperature and precipitation time series ====
 
-# extract year and anom data ----
-# Group by year and sum precipitation over the time dimension (within each year)
-total = climate02416["prcp"].groupby("time.year").sum("time")
-annualrain = total.values
-years = total.year.values
+# Step is as follows: 
+# --------------
+# 1. get annual Sum of precipitation 
+# 2. get annual Mean of temperature 
+# 3. get moving average with an window of 11 
+# 4. get standard deviation of moving average 
+# 5. plot 
+# --------------
 
-# plot ----
-# then moving average over 11 points 
+# define moving average function ----
 def moving_average(y, m):
  """
  2m+1 point moving average of array y.
@@ -151,62 +159,106 @@ def moving_average(y, m):
      ms[k] = np.std(y[kmin:kmax])
  return mm, ms
 
-# calculate a new array as an 11-point moving average of anom
-mavg = moving_average(annualrain, 5)
+# define a function for Step. 1-4 ----
+def process_climate_timeseries(ds, prcp="prcp", temp="temp", m=5): 
+   """
+   Input: 
+    ds: xarray dataset for one glacier 
+    prcp, temp: variables in ds
+    m: half window for moving average (2m + 1 window)
+   Returns: 
+    dict with keys:
+    years: 1D int array of years
+    prcp: annual precipitation (mm)
+    prcp_mavg: moving average (mm)
+    prcp_std: moving std (mm)
+    temp: mean annual temp (degC)
+    temp_mavg: moving average (degC)
+    temp_std: moving std (degC)
+   """
+   # get annual total precipitation 
+   annual_prcp = ds[prcp].groupby("time.year").sum("time")
+   # get annual mean temperature 
+   annual_temp = ds[temp].groupby("time.year").mean("time")
+   
+   # return 1D np.array 
+   years = annual_prcp.year.values 
+   prcp = annual_prcp.values
+   temp = annual_temp.values 
+   
+   # get moving average 
+   prcp_mavg, prcp_std = moving_average(prcp, m)
+   temp_mavg, temp_std = moving_average(temp, m)
 
-# create figure and axes
-fig, ax = plt.subplots(figsize=(8,6))
+   return {
+      "years": years,
+      "prcp": prcp, 
+      "prcp_mavg": prcp_mavg, 
+      "prcp_std": prcp_std,
+      "temp": temp, 
+      "temp_mavg": temp_mavg, 
+      "temp_std": temp_std, 
+   }
 
-# plot total annual precipitation (moving average) with CIs
-ax.plot(years, mavg[0], c = "blue", label = "Moving Average", linewidth=2)
+# process both glaciers ----
+g02416 = process_climate_timeseries(climate02416)
+g01147 = process_climate_timeseries(climate01147)
+climate_data = [g02416, g01147]
 
-# confidence intervals as shaded region
-ax.fill_between(years, 
-                mavg[0] - 2*mavg[1], 
-                mavg[0] + 2*mavg[1], 
-                alpha=0.3, 
-                color="skyblue", 
-                label="Confidence intervals") 
+# plot ----
+fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharey=False, sharex=True)
 
-plt.xlabel("Year", fontsize=10)
-ax.set_ylabel("Total annual precipitation (mm)", fontsize=12)
-ax.legend(frameon=False, loc="best", title = "Precipitation (mm)")
-plt.subplots_adjust(right = 0.7)
-
-# get annual mean temperature
-temp = climate02416["temp"].groupby("time.year").mean("time")
-# total is a DataArray; extract values and year coordinate directly
-annualtemp = temp.values
-temp_mavg = moving_average(annualtemp, 5)
-
-# plot temperature 
-ax1 = ax.twinx()
-ax1.plot(years, temp_mavg[0], c = "red", label = "Moving Average", linewidth=2)
-
-# plot confidence intervals as shaded region
-ax1.fill_between(years, 
-                temp_mavg[0] - 2*temp_mavg[1], 
-                temp_mavg[0] + 2*temp_mavg[1], 
-                alpha=0.3, 
-                color="pink", 
-                label="Confidence intervals") 
+for idx, (ax, data) in enumerate(zip(axes, climate_data)): 
+   years = data["years"]
+   # plot precipitation 
+   ax.plot(years, data["prcp_mavg"], color="blue", lw=2, label="Moving average")
+   ax.fill_between(years,
+                   data["prcp_mavg"] - 2*data["prcp_std"],
+                   data["prcp_mavg"] + 2*data["prcp_std"],
+                   color="skyblue", alpha=0.3, 
+                   label = "Confidence intervals")
+   ax.set_xlabel("Year", fontsize = 12)
+   ax.set_ylabel("Total precipitation (mm)", fontsize = 12)
 
 
-# ensure secondary label sits on the right and add padding so it doesn't overlap ticks
-ax1.yaxis.set_label_position("right")
-ax1.yaxis.set_ticks_position("right")
+   # plot temperature 
+   ax1 = ax.twinx()
+   ax1.plot(years, data["temp_mavg"], color="red", lw=2, label="Moving average")
+   ax1.fill_between(years,
+                      data["temp_mavg"] - 2*data["temp_std"],
+                      data["temp_mavg"] + 2*data["temp_std"],
+                      color="lightcoral", alpha=0.2, 
+                      label = "Confidence intervals")
+   ax1.set_ylabel("Mean temperature (℃)", fontsize=12, rotation=270, labelpad=20, va="center")
 
-ax1.set_ylabel("Monthly temperature (℃)", rotation=270, labelpad=20, va="center", fontsize=12)
-# move tick labels slightly away from axis if needed
-ax1.tick_params(axis="y", labelrotation=0, pad=6)
-ax1.legend(frameon=False, loc='best', title = "Temperature(℃)")
-plt.subplots_adjust(right = 0.7)
+   # only plot legends on the second column 
+   if idx == 1:
+      # combine legends from both axes
+      lines, labels = ax.get_legend_handles_labels()
+      lines2, labels2 = ax1.get_legend_handles_labels()
+      
+      # legend for precipitation (left side)
+      ax.legend([lines[0], lines[1]], ["Moving average", "Confidence intervals"], 
+                loc="upper left", frameon=False, title="Precipitation (mm)")
+      
+      # legend for temperature (right side)
+      ax1.legend([lines2[0], lines2[1]], ["Moving average", "Confidence intervals"], 
+                 loc="lower right", frameon=False, title="Temperature (℃)")
+   
+   # annotate 
+   letter = chr(97 + idx)  # 'a' for idx=0, 'b' for idx=1
+   ax.annotate(f'({letter})',
+               xy=(-0.1, 1.1),
+               xycoords='axes fraction',
+               horizontalalignment='left',
+               verticalalignment='top',
+               fontsize=13,
+               fontweight='bold')
+
+fig.subplots_adjust(wspace=.4)
+plt.savefig("figure/task1b_climate_timeseries.png", dpi=200)
 # plt.show()
+# ============================ # 
 
-fig.savefig("figure/task1b_climate_timeseries.png")
-# ------------------------ # 
-
-# ---- Task 1c:  Temperature and precipitation time series ----
-print(thick02416.tags()) 
-
-
+# ==== Task 1c: Calculate volume of each glacier  ====
+print(thick02416.tags())
