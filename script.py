@@ -45,7 +45,6 @@ print(shape02416.crs)
 print(shape01147.crs) 
 # glacier shapefile both epsg:4326
 
-
 # Read climate + DEM + thickness data for each glacier
 climate02416 = xr.open_dataset(clim_dir + "clim_rcp85_" + rids[0] + ".nc")
 climate01147 = xr.open_dataset(clim_dir + "clim_rcp85_" + rids[1] + ".nc")
@@ -137,6 +136,7 @@ print(shape01147.CenLat)
 
 # Step is as follows: 
 # --------------
+# 0. define functions 
 # 1. get annual Sum of precipitation 
 # 2. get annual Mean of temperature 
 # 3. get moving average with an window of 11 
@@ -186,7 +186,7 @@ def process_climate_timeseries(ds, prcp="prcp", temp="temp", m=5):
    prcp = annual_prcp.values
    temp = annual_temp.values 
    
-   # get moving average 
+   # get moving average of 11 years 
    prcp_mavg, prcp_std = moving_average(prcp, m)
    temp_mavg, temp_std = moving_average(temp, m)
 
@@ -205,7 +205,7 @@ g02416 = process_climate_timeseries(climate02416)
 g01147 = process_climate_timeseries(climate01147)
 climate_data = [g02416, g01147]
 
-# plot ----
+# plot (Step. 5)----
 fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharey=False, sharex=True)
 
 for idx, (ax, data) in enumerate(zip(axes, climate_data)): 
@@ -231,19 +231,10 @@ for idx, (ax, data) in enumerate(zip(axes, climate_data)):
                       label = "Confidence intervals")
    ax1.set_ylabel("Mean temperature (℃)", fontsize=12, rotation=270, labelpad=20, va="center")
 
-   # only plot legends on the second column 
-   if idx == 1:
-      # combine legends from both axes
-      lines, labels = ax.get_legend_handles_labels()
-      lines2, labels2 = ax1.get_legend_handles_labels()
-      
-      # legend for precipitation (left side)
-      ax.legend([lines[0], lines[1]], ["Moving average", "Confidence intervals"], 
-                loc="upper left", frameon=False, title="Precipitation (mm)")
-      
-      # legend for temperature (right side)
-      ax1.legend([lines2[0], lines2[1]], ["Moving average", "Confidence intervals"], 
-                 loc="lower right", frameon=False, title="Temperature (℃)")
+   # capture legend handles from the first subplot so we can place unified legends
+   if idx == 0:
+      first_precip_handles, _ = ax.get_legend_handles_labels()
+      first_temp_handles, _ = ax1.get_legend_handles_labels()
    
    # annotate 
    letter = chr(97 + idx)  # 'a' for idx=0, 'b' for idx=1
@@ -255,10 +246,193 @@ for idx, (ax, data) in enumerate(zip(axes, climate_data)):
                fontsize=13,
                fontweight='bold')
 
-fig.subplots_adjust(wspace=.4)
+# create unified legends above the first subplot (outside the figure)
+# Use handles from the first subplot so colours/labels match
+try:
+   prec_handles = [first_precip_handles[0], first_precip_handles[1]]
+   temp_handles = [first_temp_handles[0], first_temp_handles[1]]
+except NameError:
+   # fallback: get handles from last axes
+   prec_handles, _ = axes[0].get_legend_handles_labels()
+   temp_handles, _ = axes[0].twinx().get_legend_handles_labels()
+
+# precipitation legend (left, above subplot a)
+fig.legend(prec_handles, ["Moving average", "Confidence intervals"],
+         loc="upper left", bbox_to_anchor=(0.2, 1), frameon=False,
+         title="Precipitation (mm)")
+
+# temperature legend (right, above subplot a)
+fig.legend(temp_handles, ["Moving average", "Confidence intervals"],
+         loc="upper right", bbox_to_anchor=(0.8, 1), frameon=False,
+         title="Temperature (℃)")
+
+fig.subplots_adjust(wspace=.4, top=0.88)
 plt.savefig("figure/task1b_climate_timeseries.png", dpi=200)
 # plt.show()
 # ============================ # 
 
 # ==== Task 1c: Calculate volume of each glacier  ====
-print(thick02416.tags())
+
+## 02416 ----
+# mask thickness tiff by glacier outline
+shape02416 = shape02416.to_crs("epsg:32718")
+mask_array, _ = mask(thick02416, shape02416.geometry, indexes=1, nodata=-9999)
+
+# get the pixel area of thickness
+transform = thick02416.transform 
+pixelarea = np.abs(transform[0]*transform[4])
+# print(pixelarea) # 25 m pixel, 625 m2 
+
+# get glacier volume 
+zp = mask_array[mask_array > 0]
+volume02416 = pixelarea*np.sum(zp) 
+# print(zp.max()) # 64.68 m 
+# print(zp.min()) # 6.36 m
+print(f"The volume of glacier 02416 as of 2018 is: " + str(np.round(volume02416, 3)) + "m3")
+
+## 01147 ----
+# mask thickness tiff by glacier outline
+print(thick01147.tags())
+shape01147 = shape01147.to_crs("epsg:32719")
+mask_array, _ = mask(thick01147, shape01147.geometry, indexes=1, nodata=-9999)
+
+# get glacier volume 
+zp = mask_array[mask_array > 0]
+volume01147 = pixelarea*np.sum(zp) 
+# print(zp.max()) # 72.32 m  
+# print(zp.min()) # 6.57 m
+print(f"The volume of glacier 01147 as of 2018 is: " + str(np.round(volume01147, 3)) + "m3")
+# ============================ # 
+
+# ==== Task 2: Calculate the mass balance ====
+
+# Step is as follows: 
+# --------------
+# 1. define functions 
+#    a. get climate data in np 1d array form 
+#    b. get pixel area of dem 
+#    c. set shapefile crs to dem projection 
+#    d. mask outside-glacier 
+#    e. create empty output folder
+#    f. set loops to compute glacier mass balance for each month 
+# 
+# 2. process both glaciers to get mass balance per month 
+# 3. get annual mean mass balance 
+# 4. plot annual change in glacier mass
+# --------------
+
+# 1. define functions to compute glacier mass balance----
+def compute_mb(dem, shape, climate, mu = 20, lam = 0.006, Tsolid = -2): 
+   """ 
+   Compute glacier wide monthly mass balance 
+
+   Inputs: 
+   shape: glacier shapefile
+   dem: elevation per pixel 
+   climate: monthly temperature and precipitation record between 1980-2100
+
+   Returns:
+   mass_balance: 1D array of monthly change in glacier mass (kg)
+    
+   """
+   # a. get cliamte data into np.array forms
+   time = climate.time.values
+   temperature = climate.temp.values
+   precipitation = climate.prcp.values
+   N = temperature.size
+
+   # b. get pixel area for DEM 
+   pixelArea = np.abs(dem.transform[0] * dem.transform[4])
+
+   # c. set shapefile crs to DEM projection
+   shape = shape.to_crs(dem.crs)
+
+   # d. clip out outside-the-glacier value to be -9999
+   mask_glacier, _ = mask(dem, shape.geometry, invert = False, nodata = -9999)
+
+   # remove mask_glacier 3rd dimension 
+   mask_glacier = np.squeeze(mask_glacier)
+
+   # e. empty output folder 
+   rows, cols = mask_glacier.shape # get the row and column numbers of mask_glacier 
+   smb_pixel = np.zeros((rows, cols)) # create an empty 2d-array with the same rows and columns
+   mass_balance = np.zeros(N)
+
+   # f. compute mass glacier 
+   for i in range(N): 
+      
+      temp_i = temperature[i]
+      prcp_i = precipitation[i]
+
+      # get temperature in every pixel using the temperature at the reference height, the elevation,
+      # and the lapse rate
+      temp_pixel = temp_i - (dem.read(1) - climate.ref_hgt) * lam
+
+      # get melt in each pixel (a negative number) according to degree day factor
+      smb_pixel[:,:] = -mu * temp_pixel
+
+      # set melt to zero in pixels where temperature is negative or we are outside of the glacier
+      smb_pixel[(mask_glacier==-9999)|(temp_pixel<0)] = 0.0
+
+      # add the precipitation to pixels inside the glacier, only where temperature
+      # is below the threshold for snow
+      # (the backslash is to continue an expression on the next line)
+      smb_pixel[(mask_glacier>-9999) & (temp_pixel<Tsolid)] = \
+      smb_pixel[(mask_glacier>-9999) & (temp_pixel<Tsolid)] + prcp_i
+
+      mass_balance[i] = np.sum(smb_pixel[mask_glacier != -9999]) * pixelArea
+
+   return{
+      "time" : time,
+      "mass_balance_kg" : mass_balance
+   }
+
+
+# 2. process both glaciers 
+mb02416 = pd.DataFrame(compute_mb(dem02416, shape02416, climate02416))
+mb01147 = pd.DataFrame(compute_mb(dem01147, shape01147, climate01147))
+
+print(mb02416)
+
+# 3. get moving average of mass balance over 11 years 
+ma02416, std02416 = moving_average(mb02416["mass_balance_kg"], 5)
+ma01147, std01147 = moving_average(mb01147["mass_balance_kg"], 5)
+
+# 4. plot annual change in glacier mass (kg)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4))
+
+ax1.plot(mb02416.time, ma02416, lw=2, color="blue", label="Moving average")
+ax1.fill_between(mb02416.time, 
+                 ma02416 + 2*std02416, 
+                 ma02416 - 2*std02416,
+                 color="skyblue", alpha=0.3, 
+                 label = "Confidence intervals")
+ax1.set_xlabel("Year", fontsize=12)
+ax1.set_ylabel("Mass balance (kg)", fontsize=12)
+ax1.legend(frameon=False, loc="best")
+ax1.annotate(f'(a)',
+               xy=(-0.1, 1.1),
+               xycoords='axes fraction',
+               horizontalalignment='left',
+               verticalalignment='top',
+               fontsize=13,
+               fontweight='bold')
+
+ax2.plot(mb01147.time, ma01147, lw=2, color="red", label="Moving average")
+ax2.fill_between(mb01147.time, 
+                 ma01147 + 2*std01147, 
+                 ma01147 - 2*std01147, 
+                 color="pink", alpha=0.3, 
+                 label = "Confidence intervals")
+ax2.set_xlabel("Year", fontsize=12)
+ax2.annotate(f'(b)',
+               xy=(-0.1, 1.1),
+               xycoords='axes fraction',
+               horizontalalignment='left',
+               verticalalignment='top',
+               fontsize=13,
+               fontweight='bold')
+
+plt.show()
+fig.savefig("figure/task2_mass_balance_timeseries.png", dpi=300)
+# ============================ # 
